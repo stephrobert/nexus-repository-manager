@@ -1,0 +1,8 @@
+.terraform/
+.terraform.lock.hcl
+.vagrant/
+terraform*
+deploy_nexus.yml
+data/
+**/*.pem
+.tool-versions
