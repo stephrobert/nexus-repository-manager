@@ -1,0 +1,217 @@
+---
+- hosts: all
+  gather_facts: true
+  become: true
+  vars:
+    ## Nexus
+    nexus_version: 3.37.3-02
+    force_install: false
+    nexus_version_running: 1.0
+    nexus_package: "nexus-{{ nexus_version }}-unix.tar.gz"
+    nexus_installation_dir: /opt/sonatype
+    nexus_data_dir: /data/nexus
+    nexus_os_group: nexus
+    nexus_os_user: nexus
+    nexus_tmp_dir: '/tmp/nexus'
+    nexus_default_port: 8081
+    nexus_default_context_path: '/'
+    nexus_timezone: Europe/Paris
+    nexus_os_max_filedescriptors: 65536
+    nfs_path : 192.168.1.42:/home/data
+    # nfs_path: 192.168.122.1:/home/vagrant/Projets/nexus/data
+
+    ## Nginx
+    nginx_version: 1.18
+    nginx_fqdn: artefacts.robert.local
+    cert_file: "{{ nginx_fqdn }}+4.pem"
+    cert_key: "{{ nginx_fqdn }}+4-key.pem"
+
+  tasks:
+    - name: "Check nexus-latest link stat in {{ nexus_installation_dir }}"
+      ansible.builtin.stat:
+        path: "{{ nexus_installation_dir }}/nexus"
+      register: running_version
+    - name: Register current running version if any
+      ansible.builtin.set_fact:
+        nexus_version_running: >-
+          {{
+            running_version.stat.lnk_target
+            | regex_replace('^.*/nexus-(\d*\.\d*\.\d*-\d*)', '\1')
+          }}
+      when:
+        - running_version.stat.exists | default(false)
+        - running_version.stat.islnk | default(false)
+    - name: create group nexus
+      ansible.builtin.group:
+        name: "{{ nexus_os_group }}"
+        state: present
+    - name: create user nexus
+      ansible.builtin.user:
+        name: "{{ nexus_os_user }}"
+        groups: "{{ nexus_os_group }}"
+        append: yes
+    - name: mount nfs /data
+      ansible.posix.mount:
+        src: "{{ nfs_path }}"
+        path: /data
+        # opts: vers=4,udp
+        state: mounted
+        fstype: nfs
+    - name: Create Nexus directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: "directory"
+        owner: "{{ nexus_os_user }}"
+        group: "{{ nexus_os_group }}"
+        mode: 0755
+      with_items:
+      - "{{ nexus_tmp_dir }}"
+      - "{{ nexus_installation_dir }}"
+      - "{{ nexus_data_dir }}"
+      - "{{ nexus_data_dir }}/log"
+      - "{{ nexus_data_dir }}/tmp"
+    - name: get list of services
+      ansible.builtin.service_facts:
+    - name: Stop nexus service
+      ansible.builtin.service:
+        name: nexus
+        enabled: true
+        state: stopped
+      when: (nexus_version != nexus_version_running or force_install) and "nexus.service" in ansible_facts.services
+    - name: Delete lock file
+      ansible.builtin.file:
+        path: /data/nexus/lock
+        state: absent
+      when: nexus_version != nexus_version_running or force_install
+    - name: install packages
+      ansible.builtin.package:
+        state: present
+        name:
+          - glibc-common
+          - glibc-langpack-en
+          - glibc-langpack-fr
+          - java
+          - rsync
+          - tar
+          - unzip
+          - epel-release
+          - python3-libsemanage
+          - policycoreutils-python-utils
+    - name: set as default locale
+      ansible.builtin.command: localectl set-locale LANG=en_US.UTF-8
+    - name: Get path to default settings
+      ansible.builtin.set_fact:
+        nexus_default_settings_file: "{{ nexus_installation_dir }}/nexus/etc/nexus-default.properties"
+    - name: install nexus
+      become_user: nexus
+      ansible.builtin.unarchive:
+        src: "http://download.sonatype.com/nexus/3/{{ nexus_package }}"
+        dest: "{{ nexus_installation_dir }}"
+        remote_src: yes
+        owner: nexus
+      when: nexus_version != nexus_version_running or force_install
+    - name: Update symlink nexus
+      ansible.builtin.file:
+        path: "{{ nexus_installation_dir }}/nexus"
+        src: "{{ nexus_installation_dir }}/nexus-{{ nexus_version }}"
+        owner: "{{ nexus_os_user }}"
+        group: "{{ nexus_os_group }}"
+        state: link
+      register: nexus_latest_version
+      when: nexus_version != nexus_version_running or force_install
+    - name: Setup Nexus tmp directory
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_installation_dir }}/nexus/bin/nexus.vmoptions"
+        regexp: "^-Djava.io.tmpdir=.*"
+        line: "-Djava.io.tmpdir={{ nexus_tmp_dir }}"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Setup Nexus data directory
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_installation_dir }}/nexus/bin/nexus.vmoptions"
+        regexp: "^-Dkaraf.data=.*"
+        line: "-Dkaraf.data={{ nexus_data_dir }}"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Setup JVM logfile directory
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_installation_dir }}/nexus/bin/nexus.vmoptions"
+        regexp: "^-XX:LogFile=.*"
+        line: "-XX:LogFile={{ nexus_data_dir }}/log/jvm.log"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Setup Nexus default timezone
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_installation_dir }}/nexus/bin/nexus.vmoptions"
+        regexp: "^-Duser.timezone=.*"
+        line: "-Duser.timezone={{ nexus_timezone }}"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Set nexus user
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_installation_dir }}/nexus/bin/nexus.rc"
+        regexp: ".*run_as_user=.*"
+        line: "run_as_user=\"{{ nexus_os_user }}\""
+      when: nexus_version != nexus_version_running or force_install
+    - name: Set nexus port
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_default_settings_file }}"
+        regexp: "^application-port=.*"
+        line: "application-port={{ nexus_default_port }}"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Set nexus context path
+      ansible.builtin.lineinfile:
+        dest: "{{ nexus_default_settings_file }}"
+        regexp: "^nexus-context-path=.*"
+        line: "nexus-context-path={{ nexus_default_context_path }}"
+      when: nexus_version != nexus_version_running or force_install
+    - name: Create systemd service configuration
+      ansible.builtin.template:
+        src: "nexus.service"
+        dest: "/etc/systemd/system"
+        mode: 0755
+      when: nexus_version != nexus_version_running or force_install
+    - name: Reload systemd service configuration
+      ansible.builtin.service:
+        name: nexus
+        enabled: true
+        state: restarted
+        daemon_reload: yes
+      when: nexus_version != nexus_version_running or force_install
+    - name: Install tools for debug
+      ansible.builtin.package:
+        name:
+          - htop
+          - net-tools
+        state: present
+# Deploy Nginx
+    - name: install nginx
+      dnf:
+        name: '@nginx:{{ nginx_version }}'
+        state: present
+    - name: template nginx configuration
+      ansible.builtin.template:
+        src: artefacts.conf
+        dest: /etc/nginx/conf.d/artefacts.conf
+        mode: 0640
+      notify: reload_nginx
+    - name: copy certificate
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "/etc/ssl/{{ item }}"
+        mode: 0640
+      with_items:
+        - "{{ cert_file }}"
+        - "{{ cert_key }}"
+      notify: reload_nginx
+    - name: set sebool httpd can network connect to on
+      ansible.posix.seboolean:
+        name: httpd_can_network_connect
+        state: yes
+        persistent: yes
+    - name: enable & start nginx
+      ansible.builtin.service:
+        name: nginx
+        enabled: yes
+        state: started
+  handlers:
+    - name: reload_nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
