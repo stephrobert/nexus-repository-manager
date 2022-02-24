@@ -9,7 +9,7 @@ terraform {
 // instance the provider
 provider "libvirt" {
   // uri = "qemu:///system"
-  uri = "qemu+ssh://root@devbox/system"
+  uri = "qemu+ssh://admuser@devbox2.robert.local/system"
 }
 
 // variables that can be overriden
@@ -19,10 +19,16 @@ variable "ip_type" { default = "dhcp" } # dhcp is other valid type
 variable "memoryMB" { default = 1024*3 }
 variable "cpu" { default = 3 }
 
+resource "libvirt_pool" "artefacts" {
+  name = "artefacts"
+  type = "dir"
+  path = "/data/images/artefacts"
+}
+
 // fetch the latest ubuntu release image from their mirrors
 resource "libvirt_volume" "os_image" {
   name = "${var.hostname}-os_image"
-  pool = "default"
+  pool = "${libvirt_pool.artefacts.name}"
   source = "https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2"
   format = "qcow2"
 }
@@ -30,7 +36,7 @@ resource "libvirt_volume" "os_image" {
 // Use CloudInit ISO to add ssh-key to the instance
 resource "libvirt_cloudinit_disk" "commoninit" {
           name = "${var.hostname}-commoninit.iso"
-          pool = "default"
+          pool = "${libvirt_pool.artefacts.name}"
           user_data      = data.template_cloudinit_config.config.rendered
           network_config = data.template_file.network_config.rendered
 }
@@ -57,7 +63,6 @@ data "template_cloudinit_config" "config" {
 data "template_file" "network_config" {
   template = file("${path.module}/network_config_${var.ip_type}.cfg")
 }
-
 
 // Create the machine
 resource "libvirt_domain" "domain-ubuntu" {
