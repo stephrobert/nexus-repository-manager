@@ -17,7 +17,7 @@
     nexus_default_context_path: '/'
     nexus_timezone: Europe/Paris
     nexus_os_max_filedescriptors: 65536
-    nfs_path : 192.168.1.42:/home/data
+    nfs_path : 192.168.1.101:/data
     # nfs_path: 192.168.122.1:/home/vagrant/Projets/nexus/data
 
     ## Nginx
@@ -50,6 +50,11 @@
         name: "{{ nexus_os_user }}"
         groups: "{{ nexus_os_group }}"
         append: yes
+    - name: create /data mount
+      ansible.builtin.file:
+        path: /data
+        state: directory
+        mode: 0755
     - name: mount nfs /data
       ansible.posix.mount:
         src: "{{ nfs_path }}"
@@ -182,9 +187,14 @@
         state: present
 # Deploy Nginx
     - name: install nginx
-      dnf:
+      ansible.builtin.dnf:
         name: '@nginx:{{ nginx_version }}'
         state: present
+    - name: copy nginx config
+      ansible.builtin.copy:
+        src: files/nginx.conf
+        dest: /etc/nginx
+        mode: 0644
     - name: template nginx configuration
       ansible.builtin.template:
         src: artefacts.conf
