@@ -16,19 +16,13 @@ provider "libvirt" {
 variable "hostname" { default = "artefacts" }
 variable "domain" { default = "robert.local" }
 variable "ip_type" { default = "dhcp" } # dhcp is other valid type
-variable "memoryMB" { default = 1024*3 }
-variable "cpu" { default = 3 }
-
-resource "libvirt_pool" "artefacts" {
-  name = "artefacts"
-  type = "dir"
-  path = "/data/images/artefacts"
-}
+variable "memoryMB" { default = 1024*2 }
+variable "cpu" { default = 2 }
 
 // fetch the latest ubuntu release image from their mirrors
 resource "libvirt_volume" "os_image" {
   name = "${var.hostname}-os_image"
-  pool = "${libvirt_pool.artefacts.name}"
+  pool = "devbox"
   source = "https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2"
   format = "qcow2"
 }
@@ -36,7 +30,7 @@ resource "libvirt_volume" "os_image" {
 // Use CloudInit ISO to add ssh-key to the instance
 resource "libvirt_cloudinit_disk" "commoninit" {
           name = "${var.hostname}-commoninit.iso"
-          pool = "${libvirt_pool.artefacts.name}"
+          pool = "devbox"
           user_data      = data.template_cloudinit_config.config.rendered
           network_config = data.template_file.network_config.rendered
 }
