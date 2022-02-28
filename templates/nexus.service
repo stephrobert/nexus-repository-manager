@@ -1,6 +1,6 @@
 [Unit]
 Description=nexus service
-After=network.target
+After=network.target data.mount
 
 [Service]
 Type=forking
